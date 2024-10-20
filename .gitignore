@@ -1,0 +1,53 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Virtual environment directories
+myenv/
+venv/
+env/
+ENV/
+
+# Private environment variables
+.env
+
+# Logs and debug files
+*.log
+logs/
+debug.log
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Uploads and temporary files
+uploads/
+*.tmp
+
+# AWS or other credentials
+*.pem
+
+# Cache and dependency folders
+pip-log.txt
+pip-delete-this-directory.txt
+
+# VSCode settings (optional if you'd like to exclude workspace settings)
+.vscode/
+
+# Flutter build artifacts (if Flutter is used)
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+
+# Node modules (if relevant)
+node_modules/
+
+.env
