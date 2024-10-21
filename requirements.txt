@@ -1,0 +1,8 @@
+gradio
+gradio_pdf
+PyPDF2
+langchain-openai
+faiss-cpu
+langchain
+langchain-community
+openai

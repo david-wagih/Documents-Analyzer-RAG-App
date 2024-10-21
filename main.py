@@ -11,6 +11,7 @@ from langchain_openai import ChatOpenAI
 from langchain.chains import RetrievalQA
 
 
+
 # Global variables
 embeddings = None
 docsearch = None
@@ -113,4 +114,4 @@ with gr.Blocks() as demo:
     )
 
 # Launch the demo
-demo.launch(share=True)
+demo.launch(debug=True)
