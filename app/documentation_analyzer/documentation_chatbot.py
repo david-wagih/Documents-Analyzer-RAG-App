@@ -6,7 +6,13 @@ from langchain_community.document_loaders import UnstructuredURLLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_community.vectorstores import FAISS
-from langchain.chains import ConversationalRetrievalChain
+from langchain.chains import (
+    create_history_aware_retriever,
+    create_retrieval_chain,
+)
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import START, MessagesState, StateGraph
@@ -20,7 +26,7 @@ import pytesseract
 import uuid
 import shutil
 from tqdm import tqdm
-
+from app.documentation_analyzer.database import create_connection, create_table, insert_document, fetch_all_documents
 
 # Suppress InsecureRequestWarning
 warnings.simplefilter('ignore', InsecureRequestWarning)
@@ -30,6 +36,23 @@ ssl._create_default_https_context = ssl._create_unverified_context
 
 
 load_dotenv()
+
+# Initialize database
+db_file = 'documents.db'
+
+def insert_document_with_new_connection(name, embedding):
+    conn = create_connection(db_file)
+    try:
+        insert_document(conn, name, embedding)
+    finally:
+        conn.close()
+
+def fetch_all_documents_with_new_connection():
+    conn = create_connection(db_file)
+    try:
+        return fetch_all_documents(conn)
+    finally:
+        conn.close()
 
 def process_uploaded_file(file):
     if file is None:
@@ -109,7 +132,7 @@ class UnstructuredURLLoaderInsecure(UnstructuredURLLoader):
         return response.content
 
 def load_and_process_document(url_or_path, progress=gr.Progress()):
-    progress(0, desc="Starting document processing")
+    progress(0.0, desc="Starting document processing")
     
     # Determine if the input is a URL or a file path
     if url_or_path.lower().startswith('http'):
@@ -123,6 +146,19 @@ def load_and_process_document(url_or_path, progress=gr.Progress()):
     progress(0.3, desc="Document loaded")
     
     embeddings = OpenAIEmbeddings()
+    
+    for doc in documents:
+        # Extract text content from the Document object
+        text_content = doc.page_content
+        
+        # Generate a unique identifier for the document
+        doc_id = str(uuid.uuid4())
+        
+        # Embed the text content
+        embedding = embeddings.embed_query(text_content)
+        
+        # Insert the document into the database
+        insert_document_with_new_connection(doc_id, embedding)
     
     # Check if docs is empty
     if not documents:
@@ -142,6 +178,7 @@ def load_and_process_document(url_or_path, progress=gr.Progress()):
     return vectorstore
 
 def create_conversational_agent(vectorstore):
+    documents = fetch_all_documents_with_new_connection()
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise ValueError("OPENAI_API_KEY environment variable not found.")
@@ -149,12 +186,43 @@ def create_conversational_agent(vectorstore):
     llm = ChatOpenAI(temperature=0, api_key=api_key)
     retriever = vectorstore.as_retriever()
 
-    # Create the ConversationalRetrievalChain
-    qa_chain = ConversationalRetrievalChain.from_llm(
-        llm=llm,
-        retriever=retriever,
-        return_source_documents=True
+    # Contextualize question
+    contextualize_q_system_prompt = (
+        "Given a chat history and the latest user question "
+        "which might reference context in the chat history, "
+        "formulate a standalone question which can be understood "
+        "without the chat history. Do NOT answer the question, just "
+        "reformulate it if needed and otherwise return it as is."
     )
+    contextualize_q_prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", contextualize_q_system_prompt),
+            MessagesPlaceholder("chat_history"),
+            ("human", "{input}"),
+        ]
+    )
+    history_aware_retriever = create_history_aware_retriever(
+        llm, retriever, contextualize_q_prompt
+    )
+
+    # Answer question
+    qa_system_prompt = (
+        "You are an assistant for question-answering tasks. Use "
+        "the following pieces of retrieved context to answer the "
+        "question. If you don't know the answer, just say that you "
+        "don't know. Use three sentences maximum and keep the answer "
+        "concise.\n\n"
+        "{context}"
+    )
+    qa_prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", qa_system_prompt),
+            MessagesPlaceholder("chat_history"),
+            ("human", "{input}"),
+        ]
+    )
+    question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
+    rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
 
     # Define the graph
     workflow = StateGraph(state_schema=MessagesState)
@@ -163,7 +231,7 @@ def create_conversational_agent(vectorstore):
     def call_model(state: MessagesState):
         question = state["messages"][-1].content
         chat_history = state.get("chat_history", [])
-        result = qa_chain.invoke({"question": question, "chat_history": chat_history})
+        result = rag_chain.invoke({"input": question, "chat_history": chat_history})
         response = AIMessage(content=result["answer"])
         return {"messages": [response], "chat_history": chat_history + [(question, result["answer"])]}
 
@@ -195,6 +263,10 @@ def gradio_interface():
             url_input = gr.Textbox(label="Enter Documentation URL or PDF Path")
             file_upload = gr.File(label="Or Upload PDF", file_types=[".pdf"])
         
+        # Fetch document names for dropdown
+        document_names = [doc[1] for doc in fetch_all_documents_with_new_connection()]
+        document_select = gr.Dropdown(label="Select Documents", choices=document_names, multiselect=True)
+        
         scan_button = gr.Button("Scan Document")
         
         status_box = gr.Textbox(label="Status", interactive=False)
@@ -207,7 +279,7 @@ def gradio_interface():
         state = gr.State()
         thread_config = gr.State()
 
-        def start_scan(url_or_path, uploaded_file, progress=gr.Progress()):
+        def start_scan(url_or_path, uploaded_file, selected_docs, progress=gr.Progress()):
             try:
                 if uploaded_file is not None:
                     file_path, _ = upload_file(uploaded_file)
@@ -272,7 +344,7 @@ def gradio_interface():
             
             return "", chat_history
 
-        scan_button.click(start_scan, inputs=[url_input, file_upload], outputs=[status_box, msg, send_button, chatbot])
+        scan_button.click(start_scan, inputs=[url_input, file_upload, document_select], outputs=[status_box, msg, send_button, chatbot])
         msg.submit(respond, inputs=[msg, chatbot], outputs=[msg, chatbot])
         send_button.click(respond, inputs=[msg, chatbot], outputs=[msg, chatbot])
 
