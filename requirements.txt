@@ -6,3 +6,16 @@ faiss-cpu
 langchain
 langchain-community
 openai
+python-dotenv
+beautifulsoup4
+requests
+anthropic
+pdf2image
+opencv-python
+scikit-image
+numpy
+matplotlib
+python-dateutil
+pytesseract
+Pillow
+tqdm
