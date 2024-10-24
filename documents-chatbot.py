@@ -4,14 +4,12 @@ from dotenv import load_dotenv
 import gradio as gr
 from langchain_community.document_loaders import UnstructuredURLLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_openai import OpenAIEmbeddings
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_community.vectorstores import FAISS
-from langchain_openai import ChatOpenAI
-from langchain.chains import (
-    create_history_aware_retriever,
-    create_retrieval_chain,
-)
-from langchain.memory import ConversationBufferMemory
+from langchain.chains import ConversationalRetrievalChain
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import START, MessagesState, StateGraph
 import warnings
 from urllib3.exceptions import InsecureRequestWarning
 import tempfile
@@ -21,12 +19,7 @@ from PIL import Image
 import pytesseract
 import uuid
 import shutil
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from langchain_community.vectorstores import FAISS
-from langchain.chains import ConversationalRetrievalChain
-from langchain_core.messages import HumanMessage, AIMessage
-from langgraph.checkpoint.memory import MemorySaver
-from langgraph.graph import START, MessagesState, StateGraph
+from tqdm import tqdm
 
 
 # Suppress InsecureRequestWarning
@@ -115,7 +108,9 @@ class UnstructuredURLLoaderInsecure(UnstructuredURLLoader):
         response.raise_for_status()
         return response.content
 
-def load_and_process_document(url_or_path):
+def load_and_process_document(url_or_path, progress=gr.Progress()):
+    progress(0, desc="Starting document processing")
+    
     # Determine if the input is a URL or a file path
     if url_or_path.lower().startswith('http'):
         # Load content from URL
@@ -125,17 +120,24 @@ def load_and_process_document(url_or_path):
         # Load content from file
         documents = read_file(url_or_path)
     
+    progress(0.3, desc="Document loaded")
+    
     embeddings = OpenAIEmbeddings()
     
     # Check if docs is empty
     if not documents:
         raise ValueError("No documents were processed. Please check your input.")
     
-    try:
-        vectorstore = FAISS.from_documents(documents, embeddings)
-    except Exception as e:
-        print(f"Error creating FAISS index: {e}")
-        raise
+    progress(0.5, desc="Creating embeddings")
+    
+    # Create embeddings with progress updates
+    total_docs = len(documents)
+    vectorstore = FAISS.from_documents(
+        tqdm(documents, desc="Processing documents", total=total_docs),
+        embeddings
+    )
+    
+    progress(1.0, desc="Document processing complete")
     
     return vectorstore
 
@@ -147,19 +149,23 @@ def create_conversational_agent(vectorstore):
     llm = ChatOpenAI(temperature=0, api_key=api_key)
     retriever = vectorstore.as_retriever()
 
+    # Create the ConversationalRetrievalChain
+    qa_chain = ConversationalRetrievalChain.from_llm(
+        llm=llm,
+        retriever=retriever,
+        return_source_documents=True
+    )
+
     # Define the graph
     workflow = StateGraph(state_schema=MessagesState)
 
     # Define the function that calls the model
     def call_model(state: MessagesState):
-        qa_chain = ConversationalRetrievalChain.from_llm(
-            llm=llm,
-            retriever=retriever,
-            return_source_documents=True
-        )
-        result = qa_chain({"question": state["messages"][-1].content, "chat_history": state["messages"][:-1]})
+        question = state["messages"][-1].content
+        chat_history = state.get("chat_history", [])
+        result = qa_chain.invoke({"question": question, "chat_history": chat_history})
         response = AIMessage(content=result["answer"])
-        return {"messages": [response]}
+        return {"messages": [response], "chat_history": chat_history + [(question, result["answer"])]}
 
     # Define the graph structure
     workflow.add_edge(START, "model")
@@ -173,8 +179,8 @@ def create_conversational_agent(vectorstore):
 
     return app
 
-def chatbot_interface(url_or_path):
-    vectorstore = load_and_process_document(url_or_path)
+def chatbot_interface(url_or_path, progress=gr.Progress()):
+    vectorstore = load_and_process_document(url_or_path, progress)
     qa_app = create_conversational_agent(vectorstore)
     thread_id = uuid.uuid4()
     config = {"configurable": {"thread_id": thread_id}}
@@ -192,7 +198,7 @@ def gradio_interface():
         scan_button = gr.Button("Scan Document")
         
         status_box = gr.Textbox(label="Status", interactive=False)
-        chatbot = gr.Chatbot(type="messages")
+        chatbot = gr.Chatbot(label="Conversation", type="messages")
         
         with gr.Row():
             msg = gr.Textbox(label="Your Question", interactive=False)
@@ -201,7 +207,7 @@ def gradio_interface():
         state = gr.State()
         thread_config = gr.State()
 
-        def start_scan(url_or_path, uploaded_file):
+        def start_scan(url_or_path, uploaded_file, progress=gr.Progress()):
             try:
                 if uploaded_file is not None:
                     file_path, _ = upload_file(uploaded_file)
@@ -212,9 +218,13 @@ def gradio_interface():
                         "Please provide a URL or upload a PDF file.",
                         gr.update(interactive=False),
                         gr.update(interactive=False),
+                        []  # Clear chat history
                     )
 
-                qa_app, config = chatbot_interface(file_path)
+                progress(0.1, desc="Starting document processing")
+                qa_app, config = chatbot_interface(file_path, progress)
+                progress(1.0, desc="Document processing complete")
+                
                 state.value = qa_app
                 thread_config.value = config
                 msg.interactive = True
@@ -223,33 +233,50 @@ def gradio_interface():
                     "Document loaded and embedded. You can start asking questions now.",
                     gr.update(interactive=True),
                     gr.update(interactive=True),
+                    []  # Clear chat history
                 )
             except Exception as e:
                 return (
                     f"Error: {str(e)}",
                     gr.update(interactive=False),
                     gr.update(interactive=False),
+                    []  # Clear chat history
                 )
 
         def respond(message, chat_history):
             qa_app = state.value
             config = thread_config.value
             if qa_app is None:
-                return "Please load a document first.", chat_history
+                return "", [{"role": "assistant", "content": "Please load a document first."}]
             
-            input_message = HumanMessage(content=message)
-            for event in qa_app.stream({"messages": [input_message]}, config, stream_mode="values"):
+            # Convert chat history to the format expected by ConversationalRetrievalChain
+            lc_chat_history = []
+            for i in range(0, len(chat_history), 2):
+                if i + 1 < len(chat_history):
+                    human_msg = chat_history[i]["content"]
+                    ai_msg = chat_history[i + 1]["content"]
+                    lc_chat_history.append((human_msg, ai_msg))
+            
+            # Prepare the input for the qa_app
+            input_data = {
+                "messages": [HumanMessage(content=message)],
+                "chat_history": lc_chat_history
+            }
+            
+            for event in qa_app.stream(input_data, config, stream_mode="values"):
                 response = event["messages"][-1].content
             
-            chat_history.append((message, response))
+            # Update chat history with new messages
+            chat_history.append({"role": "human", "content": message})
+            chat_history.append({"role": "assistant", "content": response})
+            
             return "", chat_history
 
-
-        scan_button.click(start_scan, inputs=[url_input, file_upload], outputs=[status_box, msg, send_button])
+        scan_button.click(start_scan, inputs=[url_input, file_upload], outputs=[status_box, msg, send_button, chatbot])
         msg.submit(respond, inputs=[msg, chatbot], outputs=[msg, chatbot])
         send_button.click(respond, inputs=[msg, chatbot], outputs=[msg, chatbot])
 
-    iface.launch()
+    iface.launch(share=True)
 
 if __name__ == "__main__":
     gradio_interface()
