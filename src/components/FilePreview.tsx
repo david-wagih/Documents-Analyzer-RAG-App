@@ -3,7 +3,7 @@ import { Document, Page, pdfjs } from "react-pdf";
 import "react-pdf/dist/esm/Page/AnnotationLayer.css";
 import "react-pdf/dist/esm/Page/TextLayer.css";
 
-// Set up the worker correctly for Next.js
+// Set up the worker
 pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
 
 interface FilePreviewProps {
@@ -77,7 +77,7 @@ export default function FilePreview({ file, url }: FilePreviewProps) {
                     setCurrentPage((prev) => Math.max(prev - 1, 1))
                   }
                   disabled={currentPage <= 1}
-                  className="px-3 py-1 bg-blue-500 text-white rounded disabled:bg-gray-300 hover:bg-blue-600 transition-colors"
+                  className="px-3 py-1 bg-blue-500 text-white rounded disabled:bg-gray-300"
                 >
                   Previous
                 </button>
@@ -89,7 +89,7 @@ export default function FilePreview({ file, url }: FilePreviewProps) {
                     setCurrentPage((prev) => Math.min(prev + 1, numPages))
                   }
                   disabled={currentPage >= numPages}
-                  className="px-3 py-1 bg-blue-500 text-white rounded disabled:bg-gray-300 hover:bg-blue-600 transition-colors"
+                  className="px-3 py-1 bg-blue-500 text-white rounded disabled:bg-gray-300"
                 >
                   Next
                 </button>

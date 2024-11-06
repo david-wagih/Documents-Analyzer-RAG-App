@@ -88,3 +88,5 @@ next-env.d.ts
 # ChromaDB
 chroma_db/
 *.parquet
+
+package-lock.json

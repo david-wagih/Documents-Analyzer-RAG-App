@@ -1,58 +1,24 @@
-"use client";
+import React, { useState } from "react";
+import FileUpload from "../components/FileUpload";
+import ChatInterface from "../components/ChatInterface";
+import { DocumentStatus } from "../types/chat";
+import { uploadDocument } from "../services/api";
 
-import React, { useState, useEffect } from "react";
-import FileUpload from "@/components/FileUpload";
-import ChatInterface from "@/components/ChatInterface";
-import { DocumentStatus } from "@/types/chat";
-
-export default function DocumentationChat() {
+export default function DocChat() {
   const [documents, setDocuments] = useState<DocumentStatus[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    console.log("Current documents state:", documents);
-  }, [documents]);
-
   const handleFileSelect = async (file: File) => {
-    console.log("File selected:", {
-      name: file.name,
-      type: file.type,
-      size: `${(file.size / 1024 / 1024).toFixed(2)} MB`,
-    });
-
     setIsUploading(true);
     setError(null);
 
-    const formData = new FormData();
-    formData.append("file", file);
-
     try {
-      console.log("Uploading file to API...");
-      const response = await fetch("/api/doc-upload", {
-        method: "POST",
-        body: formData,
-      });
-
-      console.log("Upload response status:", response.status);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error("Upload error:", errorText);
-        throw new Error(`Failed to upload document: ${errorText}`);
-      }
-
-      const data = await response.json();
-      console.log("Upload successful:", data);
-
-      setDocuments((prev) => {
-        const newDocs = [...prev, data];
-        console.log("Updated documents list:", newDocs);
-        return newDocs;
-      });
+      const documentData = await uploadDocument(file);
+      setDocuments((prev) => [...prev, documentData]);
     } catch (err) {
-      console.error("Error during upload:", err);
       setError(err instanceof Error ? err.message : "An error occurred");
+      console.error("Upload error:", err);
     } finally {
       setIsUploading(false);
     }

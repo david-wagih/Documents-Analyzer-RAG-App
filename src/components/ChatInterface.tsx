@@ -1,29 +1,15 @@
-"use client";
-
 import React, { useState, useRef, useEffect } from "react";
-import { DocumentStatus } from "@/types/chat";
-import ReactMarkdown, { Components } from "react-markdown";
+import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import mermaid from "mermaid";
+import { DocumentStatus } from "../types/chat";
 import ZoomableImage from "./ZoomableImage";
-
-// Initialize mermaid
-mermaid.initialize({
-  startOnLoad: true,
-  theme: "default",
-  securityLevel: "loose",
-});
 
 interface Message {
   role: "user" | "assistant";
   content: string;
   type?: "text" | "diagram" | "clarification";
   mermaid?: string;
-  sources?: Array<{
-    content: string;
-    metadata: any;
-  }>;
-  has_context?: boolean;
   suggested_types?: string[];
   needs_clarification?: string;
 }
@@ -78,10 +64,6 @@ export default function ChatInterface({ documents }: ChatInterfaceProps) {
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    console.log("Documents available for chat:", documents);
-  }, [documents]);
-
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
@@ -95,42 +77,27 @@ export default function ChatInterface({ documents }: ChatInterfaceProps) {
     if (!input.trim() || isLoading) return;
 
     const userMessage = input.trim();
-    console.log("Sending message:", userMessage);
-    console.log(
-      "Active documents:",
-      documents.map((d) => ({ id: d.id, name: d.filename }))
-    );
-
     setInput("");
     setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
     setIsLoading(true);
 
     try {
-      const payload = {
-        message: userMessage,
-        documentIds: documents.map((doc) => doc.id),
-      };
-      console.log("Sending request to API:", payload);
-
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          message: userMessage,
+          documentIds: documents.map((doc) => doc.id),
+        }),
       });
 
-      console.log("API Response status:", response.status);
-
       if (!response.ok) {
-        const errorText = await response.text();
-        console.error("API Error:", errorText);
-        throw new Error(`Failed to get response: ${errorText}`);
+        throw new Error("Failed to get response");
       }
 
       const data = await response.json();
-      console.log("API Response data:", data);
-
       setMessages((prev) => [
         ...prev,
         {
@@ -138,8 +105,6 @@ export default function ChatInterface({ documents }: ChatInterfaceProps) {
           content: data.response,
           type: data.type,
           mermaid: data.mermaid,
-          sources: data.sources,
-          has_context: data.has_context,
           suggested_types: data.suggested_types,
           needs_clarification: data.needs_clarification,
         },
@@ -157,66 +122,6 @@ export default function ChatInterface({ documents }: ChatInterfaceProps) {
     } finally {
       setIsLoading(false);
     }
-  };
-
-  // Add the MarkdownComponents definition
-  const MarkdownComponents: Components = {
-    p: ({ children }) => <p className="mb-2">{children}</p>,
-    ul: ({ children }) => <ul className="list-disc ml-4 mb-2">{children}</ul>,
-    ol: ({ children }) => (
-      <ol className="list-decimal ml-4 mb-2">{children}</ol>
-    ),
-    li: ({ children }) => <li className="mb-1">{children}</li>,
-    code: ({ className, children }) => {
-      const match = /language-(\w+)/.exec(className || "");
-      return (
-        <code
-          className={`${
-            !className
-              ? "bg-gray-200 rounded px-1"
-              : "block bg-gray-200 p-2 rounded"
-          }`}
-        >
-          {children}
-        </code>
-      );
-    },
-    pre: ({ children }) => (
-      <pre className="bg-gray-200 p-2 rounded mb-2">{children}</pre>
-    ),
-    h1: ({ children }) => (
-      <h1 className="text-xl font-bold mb-2">{children}</h1>
-    ),
-    h2: ({ children }) => (
-      <h2 className="text-lg font-bold mb-2">{children}</h2>
-    ),
-    h3: ({ children }) => (
-      <h3 className="text-md font-bold mb-2">{children}</h3>
-    ),
-    a: ({ href, children }) => (
-      <a
-        href={href}
-        className="text-blue-600 hover:underline"
-        target="_blank"
-        rel="noopener noreferrer"
-      >
-        {children}
-      </a>
-    ),
-    blockquote: ({ children }) => (
-      <blockquote className="border-l-4 border-gray-300 pl-4 italic">
-        {children}
-      </blockquote>
-    ),
-    table: ({ children }) => (
-      <div className="overflow-x-auto">
-        <table className="min-w-full divide-y divide-gray-300">
-          {children}
-        </table>
-      </div>
-    ),
-    th: ({ children }) => <th className="px-3 py-2 bg-gray-200">{children}</th>,
-    td: ({ children }) => <td className="px-3 py-2 border-t">{children}</td>,
   };
 
   return (
@@ -239,27 +144,14 @@ export default function ChatInterface({ documents }: ChatInterfaceProps) {
               {message.role === "assistant" &&
               message.type === "diagram" &&
               message.mermaid ? (
-                <div className="w-full max-w-3xl mx-auto">
+                <>
                   <ReactMarkdown>{message.content}</ReactMarkdown>
                   <MermaidDiagram code={message.mermaid} />
-                </div>
-              ) : message.role === "assistant" ? (
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  className="prose prose-sm max-w-none dark:prose-invert"
-                  components={MarkdownComponents}
-                >
-                  {message.content}
-                </ReactMarkdown>
-              ) : message.type === "clarification" ? (
+                </>
+              ) : message.role === "assistant" &&
+                message.type === "clarification" ? (
                 <div className="space-y-2">
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
-                    className="prose prose-sm max-w-none dark:prose-invert"
-                    components={MarkdownComponents}
-                  >
-                    {message.content}
-                  </ReactMarkdown>
+                  <ReactMarkdown>{message.content}</ReactMarkdown>
                   {message.suggested_types &&
                     message.suggested_types.length > 0 && (
                       <div className="mt-2 flex flex-wrap gap-2">
@@ -278,25 +170,13 @@ export default function ChatInterface({ documents }: ChatInterfaceProps) {
                       </div>
                     )}
                 </div>
+              ) : message.role === "assistant" ? (
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  {message.content}
+                </ReactMarkdown>
               ) : (
                 message.content
               )}
-              {message.role === "assistant" &&
-                message.has_context === false && (
-                  <div className="text-xs text-gray-500 mt-2">
-                    No relevant context found in documents
-                  </div>
-                )}
-              {message.role === "assistant" &&
-                message.sources &&
-                message.sources.length > 0 && (
-                  <div className="text-xs text-gray-500 mt-2">
-                    Based on content from:{" "}
-                    {message.sources
-                      .map((source) => source.metadata.filename)
-                      .join(", ")}
-                  </div>
-                )}
             </div>
           </div>
         ))}

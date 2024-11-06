@@ -20,6 +20,8 @@ from datetime import datetime, timedelta
 import re
 from typing import Dict, Any
 import json
+from graphviz import Digraph
+from langchain.memory import ConversationBufferMemory
 
 logger = setup_logger()
 
@@ -68,19 +70,10 @@ app = FastAPI()
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3001"],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=[
-        "Content-Type",
-        "Authorization",
-        "X-Requested-With",
-        "Accept",
-        "Origin",
-        "Access-Control-Request-Method",
-        "Access-Control-Request-Headers"
-    ],
-    expose_headers=["Content-Length", "Content-Range"]
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Initialize vector store with the new client architecture
@@ -293,89 +286,309 @@ async def extract_hr_document(file: UploadFile = File(...)):
 
 @app.post("/api/doc-upload")
 async def upload_document(file: UploadFile = File(...)):
+    logger.info(f"Received document upload request: {file.filename}")
     try:
         if not file or not file.filename:
+            logger.error("No file provided")
             raise HTTPException(status_code=400, detail="No file provided")
             
         contents = await file.read()
         file_id = str(uuid.uuid4())
         
         # Get file extension safely
-        file_extension = os.path.splitext(file.filename)[1] if file.filename else ''
+        file_extension = os.path.splitext(file.filename)[1].lower() if file.filename else ''
+        logger.info(f"Processing file with extension: {file_extension}")
         
-        # Save file temporarily
-        temp_path = f"temp_{file_id}{file_extension}"
+        # Create temp directory if it doesn't exist
+        temp_dir = "temp_files"
+        os.makedirs(temp_dir, exist_ok=True)
+        
+        # Save file temporarily with safe naming
+        temp_path = os.path.join(temp_dir, f"temp_{file_id}{file_extension}")
+        logger.info(f"Saving file temporarily at: {temp_path}")
+        
         with open(temp_path, "wb") as f:
             f.write(contents)
         
-        # Load and split document
-        if file.filename and file.filename.lower().endswith('.pdf'):
-            loader = PyPDFLoader(temp_path)
-        else:
-            loader = TextLoader(temp_path)
+        try:
+            # Load and split document based on file type
+            logger.info("Processing document...")
+            if file_extension in ['.pdf']:
+                logger.info("Loading PDF document")
+                loader = PyPDFLoader(temp_path)
+            elif file_extension in ['.txt', '.md']:
+                logger.info("Loading text document")
+                loader = TextLoader(temp_path)
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unsupported file type: {file_extension}"
+                )
+                
+            # Load the document
+            documents = loader.load()
+            logger.info(f"Loaded {len(documents)} pages/sections")
             
-        documents = loader.load()
-        text_splitter = RecursiveCharacterTextSplitter()
-        splits = text_splitter.split_documents(documents)
-        
-        # Add to vector store
-        vector_store.add_documents(splits, ids=[file_id])
-        
-        # Cleanup
-        os.remove(temp_path)
-        
-        return {
-            "id": file_id,
-            "filename": file.filename,
-            "status": "ready"
-        }
+            # Split text into chunks
+            text_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=1000,
+                chunk_overlap=200,
+                length_function=len,
+                is_separator_regex=False,
+            )
+            splits = text_splitter.split_documents(documents)
+            logger.info(f"Created {len(splits)} text splits")
+            
+            # Create embeddings and store in ChromaDB
+            try:
+                logger.info("Creating embeddings and storing in ChromaDB...")
+                # Generate unique IDs for each chunk
+                chunk_ids = [f"{file_id}_{i}" for i in range(len(splits))]
+                
+                # Extract texts and metadata
+                texts = [doc.page_content for doc in splits]
+                metadatas = [
+                    {
+                        **doc.metadata,
+                        "file_id": file_id,
+                        "chunk_id": chunk_id,
+                        "filename": file.filename,
+                        "created_at": datetime.now().isoformat()
+                    } 
+                    for doc, chunk_id in zip(splits, chunk_ids)
+                ]
+                
+                # Add to vector store
+                vector_store.add_texts(
+                    texts=texts,
+                    metadatas=metadatas,
+                    ids=chunk_ids
+                )
+                
+                logger.info(f"Successfully stored {len(splits)} chunks in ChromaDB")
+                
+                return {
+                    "id": file_id,
+                    "filename": file.filename,
+                    "status": "ready",
+                    "chunks": len(splits),
+                    "metadata": {
+                        "file_type": file_extension,
+                        "total_chunks": len(splits),
+                        "created_at": datetime.now().isoformat()
+                    }
+                }
+                
+            except Exception as e:
+                logger.error(f"Error storing in ChromaDB: {str(e)}")
+                raise HTTPException(
+                    status_code=500,
+                    detail="Failed to store document embeddings"
+                )
+            
+        except Exception as e:
+            logger.error(f"Error processing document: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error processing document: {str(e)}"
+            )
+            
+        finally:
+            # Cleanup temp file
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+                logger.info("Cleaned up temporary file")
+            
     except Exception as e:
+        logger.error(f"Upload error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
     try:
-        # Initialize chat chain
+        logger.info(f"Received chat request: {request.message}")
+        logger.info(f"Document IDs: {request.documentIds}")
+
         llm = ChatOpenAI(
             temperature=0,
-            api_key=api_key
+            api_key=api_key,
+            model="gpt-4"
         )
-        qa_chain = ConversationalRetrievalChain.from_llm(
-            llm,
-            vector_store.as_retriever(),
-            return_source_documents=True
+
+        retriever = vector_store.as_retriever(
+            
         )
-        
-        # Get response
-        result = qa_chain({"question": request.message, "chat_history": []})
-        
-        # Check if response contains diagram request
-        if "diagram" in request.message.lower() or "graph" in request.message.lower():
-            # Generate diagram using graphviz
-            dot = graphviz.Digraph(comment='Generated Diagram')
-            # Add diagram generation logic based on the context
-            # This is a simplified example
-            dot.node('A', 'Concept A')
-            dot.node('B', 'Concept B')
-            dot.edge('A', 'B')
+
+        memory = ConversationBufferMemory(
+            memory_key="chat_history",
+            output_key="answer",
+            return_messages=True
+        )
+
+        graph_keywords = ['draw', 'diagram', 'graph', 'visualize', 'flowchart', 'sequence']
+        is_graph_request = any(keyword in request.message.lower() for keyword in graph_keywords)
+
+        if is_graph_request:
+            context_docs = retriever.get_relevant_documents(request.message)
+            context_text = "\n\n".join([doc.page_content for doc in context_docs])
             
-            # Create diagrams directory if it doesn't exist
-            os.makedirs("diagrams", exist_ok=True)
+            logger.info(f"Found {len(context_docs)} relevant documents for diagram")
+
+            # Analyze request clarity
+            clarity_prompt = f"""
+            Analyze if the diagram request is clear enough to determine a diagram type.
+            Request: "{request.message}"
+            Context available about: {[doc.metadata.get('filename', 'Unnamed document') for doc in context_docs]}
+
+            Return a JSON object with these fields:
+            {{
+                "is_clear": boolean,
+                "suggested_types": list of applicable diagram types,
+                "reason": explanation string,
+                "needs_clarification": what needs to be clarified (if unclear)
+            }}
+            """
             
-            # Save diagram
-            diagram_path = f"diagrams/diagram_{uuid.uuid4()}.png"
-            dot.render(diagram_path, format='png')
+            clarity_response = llm.predict(clarity_prompt)
+            clarity_data = json.loads(clarity_response)
+
+            if not clarity_data.get("is_clear", False):
+                # Return a response asking for clarification
+                diagram_types_explanation = """
+                Available diagram types:
+                1. flowchart - For processes, workflows, and decision trees
+                2. sequenceDiagram - For interactions between components/systems
+                3. classDiagram - For structure and relationships between entities
+                4. stateDiagram - For state machines and transitions
+                5. erDiagram - For entity-relationship models
+                """
+                
+                suggested_types = clarity_data.get("suggested_types", [])
+                suggestion_text = ""
+                if suggested_types:
+                    suggestion_text = f"\n\nBased on your request, you might be interested in: {', '.join(suggested_types)}"
+
+                clarification_response = {
+                    "response": f"I'd be happy to create a diagram, but I need a bit more clarification. {clarity_data.get('reason', '')}\n\n{diagram_types_explanation}{suggestion_text}\n\nCould you please specify which type of diagram you'd like to see and what specific aspect you want to visualize?",
+                    "type": "clarification",
+                    "suggested_types": suggested_types,
+                    "needs_clarification": clarity_data.get("needs_clarification"),
+                    "sources": [
+                        {
+                            "content": doc.page_content[:200] + "...",
+                            "metadata": doc.metadata
+                        }
+                        for doc in context_docs
+                    ]
+                }
+                return clarification_response
+
+            # Continue with diagram generation if request is clear
+            diagram_type = clarity_data.get("suggested_types", ["flowchart"])[0]
+            logger.info(f"Selected diagram type: {diagram_type}")
+
+            # Create diagram generation prompt based on type
+            diagram_prompt = f"""
+            Based on the following context and request, generate a mermaid.js diagram.
+            Use the determined diagram type: {diagram_type}
+
+            Context from documents:
+            {context_text}
+
+            Request: {request.message}
+
+            Rules:
+            1. Use proper mermaid.js syntax for {diagram_type}
+            2. Include only relevant information from the context
+            3. Keep the diagram clean and readable
+            4. Add clear labels and descriptions
+            5. Use proper directional flow
+            6. Include any relevant relationships or connections
+            7. Add comments to explain complex parts
+
+            Return ONLY the mermaid code wrapped in ```mermaid and ``` tags.
+            """
+
+            # Get diagram code from LLM
+            diagram_response = llm.predict(diagram_prompt)
             
-            # Include diagram path in response
-            return {
+            # Extract mermaid code
+            mermaid_match = re.search(r'```mermaid\n(.*?)```', diagram_response, re.DOTALL)
+            if mermaid_match:
+                mermaid_code = mermaid_match.group(1).strip()
+                
+                # Generate explanation for the diagram
+                explanation_prompt = f"""
+                Explain the diagram you just created. Include:
+                1. What the diagram represents
+                2. Key components and their relationships
+                3. How it relates to the original request
+                4. Important details to note
+                
+                Keep the explanation clear and concise.
+                """
+                
+                explanation = llm.predict(explanation_prompt)
+                
+                return {
+                    "response": explanation,
+                    "mermaid": mermaid_code,
+                    "type": "diagram",
+                    "diagram_type": diagram_type,
+                    "sources": [
+                        {
+                            "content": doc.page_content[:200] + "...",
+                            "metadata": doc.metadata
+                        }
+                        for doc in context_docs
+                    ]
+                }
+            else:
+                raise ValueError("Failed to generate valid diagram code")
+
+        else:
+            # Regular chat response handling
+            qa_chain = ConversationalRetrievalChain.from_llm(
+                llm=llm,
+                retriever=retriever,
+                memory=memory,
+                return_source_documents=True,
+                verbose=True,
+                chain_type="stuff"
+            )
+            
+            result = qa_chain({
+                "question": request.message,
+                "chat_history": []
+            })
+            
+            # Log retrieved documents for debugging
+            logger.info(f"Retrieved {len(result.get('source_documents', []))} source documents")
+            for i, doc in enumerate(result.get('source_documents', [])):
+                logger.info(f"Document {i + 1} content preview: {doc.page_content[:100]}...")
+
+            # Format response with source information
+            response = {
                 "response": result["answer"],
-                "diagram": diagram_path
+                "type": "text",
+                "sources": [
+                    {
+                        "content": doc.page_content[:200] + "...",
+                        "metadata": doc.metadata
+                    }
+                    for doc in result.get('source_documents', [])
+                ],
+                "has_context": bool(result.get('source_documents', []))
             }
-        
-        return {
-            "response": result["answer"]
-        }
+
+            if not response["has_context"]:
+                logger.warning("No relevant context found for the query")
+                response["response"] = "I apologize, but I couldn't find relevant information in the provided documents to answer your question accurately."
+
+            return response
+
     except Exception as e:
+        logger.error(f"Error in chat endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health")

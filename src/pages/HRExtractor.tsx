@@ -1,10 +1,9 @@
-"use client";
-
-import React, { useState } from "react";
-import FileUpload from "@/components/FileUpload";
-import FilePreview from "@/components/FilePreview";
-import ProcessingStatus from "@/components/ProcessingStatus";
-import ExtractedContent from "@/components/ExtractedContent";
+import React, { useState, useEffect } from "react";
+import FileUpload from "../components/FileUpload";
+import FilePreview from "../components/FilePreview";
+import ProcessingStatus from "../components/ProcessingStatus";
+import ExtractedContent from "../components/ExtractedContent";
+import { uploadHRDocument } from "../services/api";
 
 export default function HRExtractor() {
   const [isProcessing, setIsProcessing] = useState(false);
@@ -19,35 +18,17 @@ export default function HRExtractor() {
     setIsProcessing(true);
     setError(null);
 
-    const formData = new FormData();
-    formData.append("file", file);
-
     try {
-      console.log("Sending file to API:", file.name);
-      const response = await fetch("/api/hr-extract", {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error("API Error:", errorText);
-        throw new Error(`Failed to process document: ${response.statusText}`);
-      }
-
-      const data = await response.json();
-      console.log("API Response:", data);
+      const data = await uploadHRDocument(file);
       setExtractedData(data);
     } catch (err) {
-      console.error("Error:", err);
       setError(err instanceof Error ? err.message : "An error occurred");
     } finally {
       setIsProcessing(false);
     }
   };
 
-  // Cleanup URL when component unmounts
-  React.useEffect(() => {
+  useEffect(() => {
     return () => {
       if (fileUrl) {
         URL.revokeObjectURL(fileUrl);
@@ -92,11 +73,7 @@ export default function HRExtractor() {
                 Extracted Information
               </h2>
 
-              {isProcessing && (
-                <div className="mb-6">
-                  <ProcessingStatus />
-                </div>
-              )}
+              {isProcessing && <ProcessingStatus />}
 
               {error && (
                 <div className="mb-6 p-4 bg-red-50 text-red-600 rounded-md">
