@@ -1,21 +1,32 @@
-gradio
-gradio_pdf
-PyPDF2
-langchain-openai
-faiss-cpu
+# Core dependencies
+fastapi 
+uvicorn
+python-multipart
+pydantic
+
+# LangChain and related
 langchain
 langchain-community
-openai
-python-dotenv
-beautifulsoup4
-requests
-anthropic
-pdf2image
-opencv-python
-scikit-image
-numpy
-matplotlib
-python-dateutil
+langchain-core
+langchain-openai
+langchain-chroma
+chromadb
+
+# Document processing
 pytesseract
+pdf2image
 Pillow
-tqdm
+pypdf
+graphviz
+
+# Environment and utilities
+python-dotenv
+openai
+certifi
+urllib3
+
+# Optional but recommended
+numpy
+pandas
+
+watchfiles

@@ -1,53 +1,90 @@
-# Byte-compiled / optimized / DLL files
+# Dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# Testing
+/coverage
+
+# Next.js
+/.next/
+/out/
+.next
+
+# Production
+/build
+/dist
+
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
-
-# C extensions
 *.so
-
-# Virtual environment directories
-myenv/
-venv/
-env/
-ENV/
-
-# Private environment variables
-.env
-
-# Logs and debug files
-*.log
-logs/
-debug.log
-
-# OS generated files
-.DS_Store
-Thumbs.db
-
-# Jupyter Notebook checkpoints
-.ipynb_checkpoints/
-
-# Uploads and temporary files
-uploads/
-*.tmp
-
-# AWS or other credentials
-*.pem
-
-# Cache and dependency folders
-pip-log.txt
-pip-delete-this-directory.txt
-
-# VSCode settings (optional if you'd like to exclude workspace settings)
-.vscode/
-
-# Flutter build artifacts (if Flutter is used)
+.Python
 build/
-.flutter-plugins
-.flutter-plugins-dependencies
-.packages
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# Node modules (if relevant)
-node_modules/
-
+# Virtual Environment
 .env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE - VSCode
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# IDE - JetBrains
+.idea/
+*.iml
+*.iws
+.idea_modules/
+
+# Misc
+.DS_Store
+*.pem
+.env*.local
+.env.development
+.env.test
+.env.production
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local files
+/backend/temp_*
+/backend/chroma_db/
+/backend/diagrams/
+*.log
+
+# Vercel
+.vercel
+
+# Typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# ChromaDB
+chroma_db/
+*.parquet
